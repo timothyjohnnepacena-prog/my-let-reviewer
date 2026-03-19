@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import Link from "next/link";
 import "./globals.css";
 import { createClient } from "../utils/supabase/server";
+import { redirect } from "next/navigation";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -19,7 +20,6 @@ export default async function RootLayout({
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
 
-  // Fetch the role to decide if we show the Admin link
   let isAdmin = false;
   if (user) {
     const { data: profile } = await supabase
@@ -28,6 +28,14 @@ export default async function RootLayout({
       .eq('id', user.id)
       .single();
     isAdmin = profile?.role === 'admin';
+  }
+
+  // This is the new Sign Out logic
+  async function handleSignOut() {
+    'use server'
+    const supabase = await createClient();
+    await supabase.auth.signOut();
+    redirect('/login');
   }
 
   return (
@@ -47,9 +55,12 @@ export default async function RootLayout({
                       ADMIN PANEL
                     </Link>
                   )}
-                  <Link href="/logout" className="text-sm font-medium text-gray-600">
-                    Sign Out
-                  </Link>
+                  {/* Updated Sign Out Button */}
+                  <form action={handleSignOut}>
+                    <button className="text-sm font-medium text-gray-600 hover:text-red-600">
+                      Sign Out
+                    </button>
+                  </form>
                 </>
               ) : (
                 <Link href="/login" className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium shadow hover:bg-blue-700 transition-colors">
