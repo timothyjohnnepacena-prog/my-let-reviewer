@@ -1,114 +1,66 @@
 'use server'
 
 import { createClient } from '../../../utils/supabase/server'
+import mammoth from 'mammoth'
 
-type ExtractedChoice = { text: string; is_correct: boolean; letter: string }
-type ExtractedQuestion = {
-    question_text: string;
-    choices: ExtractedChoice[];
-}
-
-export async function parsePDF(formData: FormData): Promise<ExtractedQuestion[]> {
+export async function parsePDF(formData: FormData): Promise<any[]> {
     const file = formData.get('file') as File
     if (!file) throw new Error('No file provided')
 
-    // Read the file as a buffer
     const arrayBuffer = await file.arrayBuffer()
     const buffer = Buffer.from(arrayBuffer)
-    
-    // Mock DOM APIs for pdf.js running inside Node.js ESM environment
-    if (typeof global !== 'undefined') {
-        global.DOMMatrix = global.DOMMatrix || (class DOMMatrix {} as any)
-        global.ImageData = global.ImageData || (class ImageData {} as any)
-        global.Path2D = global.Path2D || (class Path2D {} as any)
-    }
 
-    const pdfParse = require('pdf-parse')
-    
-    // Parse PDF text
-    const data = await pdfParse(buffer)
-    const text = data.text
+    try {
+        const result = await mammoth.extractRawText({ buffer })
+        const fullText = result.value
 
-    // Heuristics Engine
-    const lines = text.split('\n').map((l: string) => l.trim()).filter(Boolean)
-    const questions: ExtractedQuestion[] = []
-    
-    let currentQuestion: Partial<ExtractedQuestion> | null = null
-    let currentAnswerLetter: string | null = null
+        const answerKey: Record<number, string> = {}
+        const answerMatches = fullText.matchAll(/(\d+)\s*\.\s*([A-D])(?!\w)/g)
+        for (const match of answerMatches) {
+            answerKey[parseInt(match[1])] = match[2].toUpperCase()
+        }
 
-    for (const line of lines) {
-        // Regex for "1. Question..." or "12. Question"
-        const qMatch = line.match(/^(\d+)\.\s+(.*)/)
-        if (qMatch) {
-            if (currentQuestion && currentQuestion.question_text) {
-                // Determine correctness based on ANSWER
-                if (currentAnswerLetter && currentQuestion.choices) {
-                    currentQuestion.choices = currentQuestion.choices.map(c => ({
-                        ...c,
-                        is_correct: c.letter === currentAnswerLetter
-                    }))
-                }
-                questions.push(currentQuestion as ExtractedQuestion)
+        const questionBlocks = fullText.split(/(?=\d+\s*\.\s+)/g)
+        const questions: any[] = []
+
+        for (const block of questionBlocks) {
+            const qMatch = block.match(/^(\d+)\s*\.\s+([\s\S]*?)(?=[A-D]\s*\.\s+|$)/)
+            if (!qMatch) continue
+
+            const qNum = parseInt(qMatch[1])
+            const qText = qMatch[2].replace(/\s+/g, ' ').trim()
+
+            const choices: any[] = []
+            const choiceMatches = block.matchAll(/([A-D])\s*[\.\)]\s+([\s\S]*?)(?=[A-D]\s*[\.\)]\s+|$)/gi)
+
+            for (const cMatch of choiceMatches) {
+                const letter = cMatch[1].toUpperCase()
+                choices.push({
+                    letter,
+                    text: cMatch[2].replace(/\s+/g, ' ').trim(),
+                    is_correct: letter === answerKey[qNum]
+                })
             }
-            
-            // Start a new question
-            currentQuestion = {
-                question_text: qMatch[2],
-                choices: []
+
+            if (choices.length >= 2) {
+                questions.push({
+                    question_text: qText,
+                    choices: choices
+                })
             }
-            currentAnswerLetter = null
-            continue;
         }
 
-        // Regex for "A. Choice..." or "B) Choice..." or "a. Choice..."
-        const cMatch = line.match(/^([a-dA-D])[\.\)]\s+(.*)/)
-        if (cMatch && currentQuestion) {
-            currentQuestion.choices = currentQuestion.choices || []
-            currentQuestion.choices.push({
-                letter: cMatch[1].toUpperCase(),
-                text: cMatch[2],
-                is_correct: false // Default to false until we find the ANSWER key
-            })
-            continue;
-        }
+        return questions
 
-        // Regex for "ANSWER: A" or "Ans: B"
-        const aMatch = line.match(/^(?:ANSWER|ANS|Answer|Ans)\s*[:=\-]?\s*([a-dA-D])/i)
-        if (aMatch && currentQuestion) {
-            currentAnswerLetter = aMatch[1].toUpperCase()
-            continue;
-        }
-
-        // If it didn't match any structural markers, append to the current open item (multi-line question support)
-        if (currentQuestion && (!currentQuestion.choices || currentQuestion.choices.length === 0)) {
-            // It's a continuation of the question text
-            currentQuestion.question_text += ' ' + line
-        } else if (currentQuestion && currentQuestion.choices && currentQuestion.choices.length > 0) {
-            // It's a continuation of the latest choice
-            const lastChoice = currentQuestion.choices[currentQuestion.choices.length - 1]
-            lastChoice.text += ' ' + line
-        }
+    } catch (error) {
+        console.error("File Parsing Error:", error)
+        throw new Error("Failed to read the file")
     }
-
-    // Push the final question
-    if (currentQuestion && currentQuestion.question_text) {
-        if (currentAnswerLetter && currentQuestion.choices) {
-            currentQuestion.choices = currentQuestion.choices.map(c => ({
-                ...c,
-                is_correct: c.letter === currentAnswerLetter
-            }))
-        }
-        questions.push(currentQuestion as ExtractedQuestion)
-    }
-
-    return questions
 }
 
-export async function bulkInsertQuestions(category: string, major: string, parsedQuestions: ExtractedQuestion[]) {
+export async function bulkInsertQuestions(category: string, major: string, parsedQuestions: any[]) {
     const supabase = await createClient()
 
-    // Since we are inserting many items, we use a sequential approach with returning ID to link the choices
-    // In actual production, an RPC is strongly advised.
     for (const q of parsedQuestions) {
         const { data: qData, error } = await supabase.from('questions').insert([{
             category,
@@ -116,9 +68,10 @@ export async function bulkInsertQuestions(category: string, major: string, parse
             question_text: q.question_text
         }]).select('id').single()
 
-        if (error) console.error("Insertion error:", error)
+        if (error) continue
+
         if (qData && q.choices.length > 0) {
-            const choicesToInsert = q.choices.map(c => ({
+            const choicesToInsert = q.choices.map((c: any) => ({
                 question_id: qData.id,
                 text: c.text,
                 is_correct: c.is_correct
