@@ -6,7 +6,7 @@ import { parsePDF, bulkInsertQuestions } from './actions'
 export default function ImportPage() {
     const [questions, setQuestions] = useState<any[]>([])
     const [loading, setLoading] = useState(false)
-    const [category, setCategory] = useState('General Education')
+    const [category, setCategory] = useState('GenEd') // Matches your ENUM
     const [major, setMajor] = useState('')
 
     async function handleUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -19,9 +19,9 @@ export default function ImportPage() {
         try {
             const data = await parsePDF(formData)
             setQuestions(data)
-            if (data.length === 0) alert('No questions detected. Please use a clean .docx file.')
+            if (data.length === 0) alert('No questions detected. Check PDF format.')
         } catch (err) {
-            alert('Failed to parse file')
+            alert('Failed to parse PDF')
         } finally {
             setLoading(false)
         }
@@ -31,10 +31,10 @@ export default function ImportPage() {
         setLoading(true)
         try {
             await bulkInsertQuestions(category, major, questions)
-            alert('Questions saved to database!')
+            alert('Saved successfully to Supabase!')
             setQuestions([])
         } catch (err) {
-            alert('Error saving to database')
+            alert(err instanceof Error ? err.message : 'Error saving to database')
         } finally {
             setLoading(false)
         }
@@ -42,66 +42,67 @@ export default function ImportPage() {
 
     return (
         <div className="p-8 max-w-4xl mx-auto">
-            <h1 className="text-2xl font-bold mb-6">Import Questions from Docx</h1>
+            <h1 className="text-2xl font-bold mb-6 text-gray-800">Import Questions</h1>
 
             <div className="flex flex-col gap-6 mb-8 p-6 border rounded-xl bg-white shadow-sm">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="flex flex-col gap-2">
-                        <label className="text-sm font-bold text-gray-700">Category</label>
+                        <label className="text-sm font-bold text-gray-600">Category</label>
                         <select
                             value={category}
                             onChange={(e) => setCategory(e.target.value)}
-                            className="p-2 border rounded-md"
+                            className="p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                         >
-                            <option>General Education</option>
-                            <option>Professional Education</option>
-                            <option>Major</option>
+                            <option value="GenEd">General Education</option>
+                            <option value="ProfEd">Professional Education</option>
+                            <option value="Major">Major</option>
                         </select>
                     </div>
 
                     {category === 'Major' && (
                         <div className="flex flex-col gap-2">
-                            <label className="text-sm font-bold text-gray-700">Major Subject</label>
+                            <label className="text-sm font-bold text-gray-600">Major Subject</label>
                             <input
                                 type="text"
-                                placeholder="e.g., Mathematics"
+                                placeholder="e.g. English"
                                 value={major}
                                 onChange={(e) => setMajor(e.target.value)}
-                                className="p-2 border rounded-md"
+                                className="p-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
                             />
                         </div>
                     )}
                 </div>
 
                 <div className="flex flex-col gap-2">
-                    <label className="text-sm font-bold text-gray-700">Upload .docx File</label>
-                    <input type="file" accept=".docx" onChange={handleUpload} disabled={loading} />
+                    <label className="text-sm font-bold text-gray-600">Select PDF File</label>
+                    <input type="file" accept=".pdf" onChange={handleUpload} disabled={loading} className="text-sm" />
                 </div>
             </div>
 
-            {loading && <p className="text-blue-600 font-bold animate-pulse">Processing file...</p>}
+            {loading && <p className="text-blue-500 font-medium animate-pulse">Processing...</p>}
 
             {questions.length > 0 && (
-                <div className="mt-8">
-                    <div className="flex justify-between items-center mb-6">
-                        <h2 className="text-xl font-bold">Preview: {questions.length} Questions Found</h2>
+                <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-xl font-semibold">Preview ({questions.length} questions)</h2>
                         <button
                             onClick={handleSave}
-                            className="bg-green-600 text-white px-8 py-3 rounded-lg font-bold hover:bg-green-700 transition-colors"
+                            className="bg-blue-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-blue-700 shadow-md transition-all"
+                            disabled={loading}
                         >
                             Confirm & Save to Database
                         </button>
                     </div>
 
-                    <div className="space-y-6 max-h-[500px] overflow-y-auto border rounded-xl p-4 bg-gray-50">
+                    <div className="space-y-4 max-h-[600px] overflow-y-auto border rounded-xl p-4 bg-gray-50">
                         {questions.map((q, i) => (
                             <div key={i} className="p-4 bg-white border rounded-lg shadow-sm">
-                                <p className="font-bold text-gray-800 mb-3">{i + 1}. {q.question_text}</p>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                <p className="font-bold text-gray-800 mb-2">{i + 1}. {q.question_text}</p>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 ml-4">
                                     {q.choices.map((c: any, ci: number) => (
                                         <div
                                             key={ci}
-                                            className={`p-2 text-sm rounded border ${c.is_correct ? 'bg-green-100 border-green-500 font-bold text-green-800' : 'bg-white border-gray-200 text-gray-600'}`}
+                                            className={`p-2 rounded text-sm border ${c.is_correct ? 'bg-green-100 border-green-500 font-bold text-green-800' : 'bg-gray-50 border-gray-200 text-gray-600'}`}
                                         >
                                             {c.letter}. {c.text}
                                         </div>

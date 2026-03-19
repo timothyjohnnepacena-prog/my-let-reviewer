@@ -1,25 +1,48 @@
 'use server'
 
 import { createClient } from '../../../utils/supabase/server'
-import mammoth from 'mammoth'
+
+// Mocks for Node.js environment required by pdfjs-dist
+if (typeof global !== 'undefined') {
+    // @ts-ignore
+    global.DOMMatrix = global.DOMMatrix || class DOMMatrix { }
+    // @ts-ignore
+    global.ReadableStream = global.ReadableStream || class ReadableStream { }
+}
 
 export async function parsePDF(formData: FormData): Promise<any[]> {
     const file = formData.get('file') as File
     if (!file) throw new Error('No file provided')
 
     const arrayBuffer = await file.arrayBuffer()
-    const buffer = Buffer.from(arrayBuffer)
+    const uint8Array = new Uint8Array(arrayBuffer)
 
     try {
-        const result = await mammoth.extractRawText({ buffer })
-        const fullText = result.value
+        const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs')
+        const loadingTask = pdfjs.getDocument({
+            data: uint8Array,
+            useSystemFonts: true,
+            disableFontFace: true
+        })
 
+        const pdf = await loadingTask.promise
+        let fullText = ""
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i)
+            const content = await page.getTextContent()
+            // @ts-ignore
+            fullText += content.items.map((item: any) => item.str).join(' ') + "\n"
+        }
+
+        // 1. Answer Key extraction (e.g. "1. A", "82. D")
         const answerKey: Record<number, string> = {}
-        const answerMatches = fullText.matchAll(/(\d+)\s*\.\s*([A-D])(?!\w)/g)
+        const answerMatches = fullText.matchAll(/(\d+)\s*\.\s*\n*\s*([A-D])(?!\w)/g)
         for (const match of answerMatches) {
             answerKey[parseInt(match[1])] = match[2].toUpperCase()
         }
 
+        // 2. Question block extraction
         const questionBlocks = fullText.split(/(?=\d+\s*\.\s+)/g)
         const questions: any[] = []
 
@@ -43,18 +66,15 @@ export async function parsePDF(formData: FormData): Promise<any[]> {
             }
 
             if (choices.length >= 2) {
-                questions.push({
-                    question_text: qText,
-                    choices: choices
-                })
+                questions.push({ question_text: qText, choices, num: qNum })
             }
         }
 
         return questions
 
     } catch (error) {
-        console.error("File Parsing Error:", error)
-        throw new Error("Failed to read the file")
+        console.error("PDF Parser Error:", error)
+        throw new Error("Failed to parse PDF")
     }
 }
 
@@ -62,21 +82,28 @@ export async function bulkInsertQuestions(category: string, major: string, parse
     const supabase = await createClient()
 
     for (const q of parsedQuestions) {
-        const { data: qData, error } = await supabase.from('questions').insert([{
-            category,
+        // Insert question
+        const { data: qData, error: qError } = await supabase.from('questions').insert([{
+            category: category,
             major: category === 'Major' ? major : null,
             question_text: q.question_text
         }]).select('id').single()
 
-        if (error) continue
+        if (qError) {
+            console.error("Insert Error:", qError.message)
+            throw new Error(`Database Error: ${qError.message}`)
+        }
 
+        // Insert choices
         if (qData && q.choices.length > 0) {
             const choicesToInsert = q.choices.map((c: any) => ({
                 question_id: qData.id,
                 text: c.text,
                 is_correct: c.is_correct
             }))
-            await supabase.from('choices').insert(choicesToInsert)
+
+            const { error: cError } = await supabase.from('choices').insert(choicesToInsert)
+            if (cError) throw new Error(`Choice Error: ${cError.message}`)
         }
     }
 }
